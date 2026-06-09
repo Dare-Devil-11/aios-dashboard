@@ -253,6 +253,166 @@ function SpawnModal({ onSpawn, onClose }) {
   );
 }
 
+/* ── Suggestion pools ── */
+const SUGGESTION_POOLS = [
+  [ 'Analyze UMAS lead pipeline and flag urgent contacts',
+    'Draft 3 blog post ideas for Santoshland wellness content',
+    'Audit AI agent fleet — find idle agents and reassign tasks',
+    'Generate weekly SEO performance summary report' ],
+  [ 'Research top keywords for Illinois elder care services',
+    'Build a content calendar for next 30 days',
+    'Review GHL automation workflows for errors',
+    'Summarize recent customer feedback and surface themes' ],
+  [ 'Identify highest-converting landing page elements',
+    'Create email nurture sequence for new UMAS leads',
+    'Optimize Santoshland booking page for mobile conversions',
+    'Run competitor content gap analysis' ],
+  [ 'Monitor and summarize activity log from last 24h',
+    'Spawn a research bot for Ayurvedic dosha quiz content',
+    'Write schema markup for 3 new UMAS service pages',
+    'Audit task bot capabilities and upgrade weakest skills' ],
+];
+
+/* ── Agent Chat Widget ── */
+function AgentChatWidget({ onSpawn }) {
+  const [open, setOpen]         = useState(false);
+  const [input, setInput]       = useState('');
+  const [pool, setPool]         = useState(0);
+  const [msgs, setMsgs]         = useState([
+    { from:'bot', text:`Hey — I'm your task agent. What do you need right now? Pick below or type anything.` }
+  ]);
+  const [thinking, setThinking] = useState(false);
+  const [pulse, setPulse]       = useState(true);
+  const bottomRef               = useRef(null);
+
+  /* auto-open after 1.5s on first load */
+  useEffect(() => {
+    const t = setTimeout(() => setOpen(true), 1500);
+    return () => clearTimeout(t);
+  }, []);
+
+  /* pulse the button when closed */
+  useEffect(() => {
+    if (open) { setPulse(false); return; }
+    const t = setInterval(() => setPulse(p => !p), 1200);
+    return () => clearInterval(t);
+  }, [open]);
+
+  /* scroll to bottom on new messages */
+  useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [msgs]);
+
+  const suggestions = SUGGESTION_POOLS[pool % SUGGESTION_POOLS.length];
+
+  function submit(task) {
+    if (!task.trim()) return;
+    setMsgs(m => [...m, {from:'user', text:task}]);
+    setInput('');
+    setThinking(true);
+    setTimeout(() => {
+      onSpawn(task);
+      setThinking(false);
+      setPool(p => p + 1);
+      setMsgs(m => [...m,
+        { from:'bot', text:`Bot spawned for: "${task.length > 60 ? task.slice(0,60)+'…' : task}". Registered to ${HOME_BASE}. Check the Task Bots tab to monitor it.` },
+        { from:'bot', text:`What else do you need?` }
+      ]);
+    }, 900);
+  }
+
+  return (
+    <>
+      {/* Floating button */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={`fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all ${open ? 'bg-slate-800 border border-slate-700' : 'bg-gradient-to-br from-amber-500 to-orange-600'} ${!open && pulse ? 'scale-110 shadow-[0_0_24px_rgba(245,158,11,0.5)]' : 'scale-100'}`}
+        aria-label="Open agent chat"
+      >
+        {open
+          ? <X className="h-5 w-5 text-slate-300"/>
+          : <Sparkles className="h-6 w-6 text-white"/>
+        }
+        {!open && (
+          <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-emerald-400 rounded-full border-2 border-[#0d0e12] animate-pulse"/>
+        )}
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div className="fixed bottom-24 right-6 z-50 w-80 bg-[#13151a] border border-slate-800/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          style={{maxHeight:'70vh'}}>
+
+          {/* Header */}
+          <div className="px-4 py-3 bg-gradient-to-r from-amber-500/10 to-orange-500/5 border-b border-slate-800/60 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
+              <Brain className="h-4 w-4 text-white"/>
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-200">Task Agent</p>
+              <p className="text-[9px] text-emerald-400 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"/>
+                Live · {HOME_BASE}
+              </p>
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-3" style={{minHeight:'120px', maxHeight:'220px'}}>
+            {msgs.map((m, i) => (
+              <div key={i} className={`flex ${m.from==='user'?'justify-end':'justify-start'}`}>
+                <div className={`max-w-[85%] px-3 py-2 rounded-xl text-xs leading-relaxed ${m.from==='user'
+                  ? 'bg-amber-500/20 text-amber-100 rounded-br-sm'
+                  : 'bg-[#1c1f26] text-slate-300 rounded-bl-sm'}`}>
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {thinking && (
+              <div className="flex justify-start">
+                <div className="bg-[#1c1f26] px-3 py-2 rounded-xl rounded-bl-sm flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{animationDelay:'0ms'}}/>
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{animationDelay:'150ms'}}/>
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{animationDelay:'300ms'}}/>
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef}/>
+          </div>
+
+          {/* Suggestions */}
+          {!thinking && (
+            <div className="px-3 pb-2 space-y-1.5">
+              <p className="text-[9px] uppercase tracking-wider text-slate-600 font-bold">Suggestions</p>
+              {suggestions.map((s, i) => (
+                <button key={i} onClick={() => submit(s)}
+                  className="w-full text-left px-3 py-2 rounded-lg bg-[#1a1d24] border border-slate-800/60 hover:border-amber-500/30 hover:bg-amber-500/5 text-[10px] text-slate-400 hover:text-slate-200 transition-all leading-snug">
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="p-3 pt-0 border-t border-slate-800/40 mt-1">
+            <form onSubmit={e => { e.preventDefault(); submit(input); }} className="flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                placeholder="Or type your own task…"
+                className="flex-1 bg-[#1a1d24] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500/50 placeholder:text-slate-700"
+              />
+              <button type="submit"
+                className="px-3 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg text-xs font-bold hover:brightness-110 transition-all flex-shrink-0">
+                <ChevronRight className="h-3.5 w-3.5"/>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 /* ── Main ── */
 export default function AIOSDashboard() {
   const VALID_TABS = ['analytics','workflows','ai','bots','content','revenue','system'];
@@ -690,6 +850,7 @@ export default function AIOSDashboard() {
           )}
         </div>
       </main>
+      <AgentChatWidget onSpawn={spawnBot}/>
     </div>
   );
 }
