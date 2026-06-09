@@ -273,140 +273,323 @@ const SUGGESTION_POOLS = [
     'Audit task bot capabilities and upgrade weakest skills' ],
 ];
 
-/* ── Agent Chat Widget ── */
+/* ── Bot Brain (localStorage persistence) ── */
+const BRAIN_KEY = 'aios-bot-brain-v1';
+function loadBrain() {
+  try { const r = localStorage.getItem(BRAIN_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+function saveBrain(b) {
+  try { localStorage.setItem(BRAIN_KEY, JSON.stringify(b)); } catch {}
+}
+function freshBrain() {
+  return { firstSeen: Date.now(), lastSeen: Date.now(), sessions: 1, tasks: 0,
+    activeSkills: ['seo-audit','copywriting','schema-markup','lead-routing','email-sequence','ghl-deploy','content-gen','graphify','page-cro'],
+    sources: [], driveUrl: '' };
+}
+function timeSince(ts) {
+  const s = Math.floor((Date.now()-ts)/1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+
+/* ── Skill Manifest ── */
+const SKILL_MANIFEST = [
+  {id:'seo-audit',     label:'SEO Audit',        cat:'Marketing', source:'local',  desc:'Audit any URL for technical SEO issues'},
+  {id:'copywriting',   label:'Copywriting',       cat:'Content',   source:'local',  desc:'Draft web copy, emails, CTAs for any brand'},
+  {id:'schema-markup', label:'Schema Markup',     cat:'SEO',       source:'local',  desc:'Generate JSON-LD structured data'},
+  {id:'lead-routing',  label:'Lead Routing',      cat:'GHL',       source:'local',  desc:'Route and tag GHL leads automatically'},
+  {id:'email-sequence',label:'Email Sequence',    cat:'Content',   source:'local',  desc:'Build multi-step nurture email flows'},
+  {id:'ghl-deploy',    label:'GHL Deploy',        cat:'GHL',       source:'local',  desc:'Deploy content directly to GoHighLevel'},
+  {id:'content-gen',   label:'Content Generator', cat:'Content',   source:'local',  desc:'Blog posts, social copy, video scripts'},
+  {id:'graphify',      label:'Graphify',          cat:'Memory',    source:'local',  desc:'Convert any input to a knowledge graph'},
+  {id:'page-cro',      label:'Page CRO',          cat:'Marketing', source:'local',  desc:'Optimize landing page conversion rate'},
+  {id:'skill-creator', label:'Skill Creator',     cat:'AI',        source:'github', desc:'Dynamically create new AI skills',          repo:'anthropics/skills'},
+  {id:'stop-slop',     label:'Stop Slop',         cat:'AI',        source:'github', desc:'Removes filler from AI-generated content',  repo:'hardikpandya/stop-slop'},
+  {id:'ultraplan',     label:'Ultraplan',         cat:'Planning',  source:'github', desc:'Strategic planning and project framework',  repo:'definite-app/ultraplan'},
+  {id:'voicebox-pro',  label:'Voicebox Pro',      cat:'Content',   source:'github', desc:'Brand voice system for multi-client ops',   repo:'claude-skills/voicebox-pro'},
+];
+
+/* ── Agent Chat Widget (persistent CORE bot) ── */
 function AgentChatWidget({ onSpawn }) {
-  const [open, setOpen]         = useState(false);
-  const [input, setInput]       = useState('');
-  const [pool, setPool]         = useState(0);
-  const [msgs, setMsgs]         = useState([
-    { from:'bot', text:`Hey — I'm your task agent. What do you need right now? Pick below or type anything.` }
-  ]);
+  const [open, setOpen]       = useState(false);
+  const [view, setView]       = useState('chat');
+  const [input, setInput]     = useState('');
+  const [urlInput, setUrlInput] = useState('');
+  const [pool, setPool]       = useState(0);
   const [thinking, setThinking] = useState(false);
-  const [pulse, setPulse]       = useState(true);
-  const bottomRef               = useRef(null);
+  const [fetching, setFetching] = useState(false);
+  const [pulse, setPulse]     = useState(true);
+  const bottomRef             = useRef(null);
 
-  /* auto-open after 1.5s on first load */
-  useEffect(() => {
-    const t = setTimeout(() => setOpen(true), 1500);
-    return () => clearTimeout(t);
-  }, []);
+  const [brain, setBrain] = useState(() => {
+    const b = loadBrain();
+    if (b) return { ...b, sessions: b.sessions + 1, lastSeen: Date.now() };
+    return freshBrain();
+  });
 
-  /* pulse the button when closed */
+  const isReturning = brain.sessions > 1;
+  const [msgs, setMsgs] = useState([{
+    from: 'bot',
+    text: isReturning
+      ? `Welcome back, Karan. Last seen ${timeSince(brain.lastSeen)} · ${brain.tasks} tasks done · ${brain.activeSkills.length} skills active · ${brain.sources.length} sources learned. What do you need?`
+      : `Hey Karan — I'm CORE, your autonomous task agent registered to ${HOME_BASE}. I learn, remember, and keep running between sessions. What do you need?`
+  }]);
+
+  useEffect(() => { saveBrain(brain); }, [brain]);
+  useEffect(() => { const t = setTimeout(() => setOpen(true), 1500); return () => clearTimeout(t); }, []);
   useEffect(() => {
     if (open) { setPulse(false); return; }
     const t = setInterval(() => setPulse(p => !p), 1200);
     return () => clearInterval(t);
   }, [open]);
-
-  /* scroll to bottom on new messages */
-  useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [msgs]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
 
   const suggestions = SUGGESTION_POOLS[pool % SUGGESTION_POOLS.length];
 
   function submit(task) {
     if (!task.trim()) return;
-    setMsgs(m => [...m, {from:'user', text:task}]);
+    setMsgs(m => [...m, { from: 'user', text: task }]);
     setInput('');
     setThinking(true);
     setTimeout(() => {
       onSpawn(task);
+      const updated = { ...brain, tasks: brain.tasks + 1 };
+      setBrain(updated);
       setThinking(false);
       setPool(p => p + 1);
       setMsgs(m => [...m,
-        { from:'bot', text:`Bot spawned for: "${task.length > 60 ? task.slice(0,60)+'…' : task}". Registered to ${HOME_BASE}. Check the Task Bots tab to monitor it.` },
-        { from:'bot', text:`What else do you need?` }
+        { from: 'bot', text: `Bot spawned → "${task.length > 55 ? task.slice(0, 55) + '…' : task}". Registered to ${HOME_BASE}.` },
+        { from: 'bot', text: `Memory updated. ${updated.tasks} tasks total this session. What else?` }
       ]);
     }, 900);
   }
 
+  async function learnFromUrl(url) {
+    if (!url.trim()) return;
+    setFetching(true);
+    setMsgs(m => [...m, { from: 'user', text: `Learn from: ${url}` }]);
+    try {
+      const raw = url.includes('github.com') && !url.includes('raw.githubusercontent')
+        ? url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
+        : url;
+      const res = await fetch(raw);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const summary = text.slice(0, 400).replace(/\n+/g, ' ').trim();
+      const source = { url, summary, addedAt: Date.now(), chars: text.length };
+      setBrain(b => ({ ...b, sources: [source, ...b.sources.slice(0, 19)] }));
+      setMsgs(m => [...m,
+        { from: 'bot', text: `Learned ${text.length.toLocaleString()} chars from ${url.split('/').pop() || 'source'}. Stored in memory.` },
+        { from: 'bot', text: summary.slice(0, 150) + '…' }
+      ]);
+    } catch (e) {
+      setMsgs(m => [...m, { from: 'bot', text: `Fetch failed (${e.message}). For GitHub files use raw.githubusercontent.com URL.` }]);
+    }
+    setFetching(false);
+    setUrlInput('');
+  }
+
+  function toggleSkill(id) {
+    setBrain(b => ({
+      ...b,
+      activeSkills: b.activeSkills.includes(id)
+        ? b.activeSkills.filter(s => s !== id)
+        : [...b.activeSkills, id]
+    }));
+  }
+
+  async function syncToDrive() {
+    if (!brain.driveUrl) return;
+    try {
+      await fetch(brain.driveUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'bot-brain', data: brain }) });
+      setMsgs(m => [...m, { from: 'bot', text: 'Memory synced to Google Drive.' }]);
+      setView('chat');
+    } catch {
+      setMsgs(m => [...m, { from: 'bot', text: 'Drive sync failed — verify your Apps Script URL.' }]);
+      setView('chat');
+    }
+  }
+
   return (
     <>
-      {/* Floating button */}
-      <button
-        onClick={() => setOpen(v => !v)}
+      <button onClick={() => setOpen(v => !v)}
         className={`fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all ${open ? 'bg-slate-800 border border-slate-700' : 'bg-gradient-to-br from-amber-500 to-orange-600'} ${!open && pulse ? 'scale-110 shadow-[0_0_24px_rgba(245,158,11,0.5)]' : 'scale-100'}`}
-        aria-label="Open agent chat"
-      >
-        {open
-          ? <X className="h-5 w-5 text-slate-300"/>
-          : <Sparkles className="h-6 w-6 text-white"/>
-        }
-        {!open && (
-          <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-emerald-400 rounded-full border-2 border-[#0d0e12] animate-pulse"/>
-        )}
+        aria-label="Open CORE agent">
+        {open ? <X className="h-5 w-5 text-slate-300"/> : <Sparkles className="h-6 w-6 text-white"/>}
+        {!open && <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-emerald-400 rounded-full border-2 border-[#0d0e12] animate-pulse"/>}
       </button>
 
-      {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-24 right-6 z-50 w-80 bg-[#13151a] border border-slate-800/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-          style={{maxHeight:'70vh'}}>
+        <div className="fixed bottom-24 right-6 z-50 w-80 bg-[#13151a] border border-slate-800/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: '78vh' }}>
 
           {/* Header */}
-          <div className="px-4 py-3 bg-gradient-to-r from-amber-500/10 to-orange-500/5 border-b border-slate-800/60 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
-              <Brain className="h-4 w-4 text-white"/>
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-200">Task Agent</p>
-              <p className="text-[9px] text-emerald-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"/>
-                Live · {HOME_BASE}
-              </p>
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-3" style={{minHeight:'120px', maxHeight:'220px'}}>
-            {msgs.map((m, i) => (
-              <div key={i} className={`flex ${m.from==='user'?'justify-end':'justify-start'}`}>
-                <div className={`max-w-[85%] px-3 py-2 rounded-xl text-xs leading-relaxed ${m.from==='user'
-                  ? 'bg-amber-500/20 text-amber-100 rounded-br-sm'
-                  : 'bg-[#1c1f26] text-slate-300 rounded-bl-sm'}`}>
-                  {m.text}
-                </div>
+          <div className="px-4 py-3 bg-gradient-to-r from-amber-500/10 to-orange-500/5 border-b border-slate-800/60 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0 relative">
+                <Brain className="h-4 w-4 text-white"/>
+                {isReturning && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-400 rounded-full border border-[#13151a]"/>}
               </div>
-            ))}
-            {thinking && (
-              <div className="flex justify-start">
-                <div className="bg-[#1c1f26] px-3 py-2 rounded-xl rounded-bl-sm flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{animationDelay:'0ms'}}/>
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{animationDelay:'150ms'}}/>
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{animationDelay:'300ms'}}/>
-                </div>
+              <div>
+                <p className="text-xs font-bold text-slate-200">CORE <span className="text-slate-600 font-normal text-[10px]">· autonomous agent</span></p>
+                <p className="text-[9px] text-emerald-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"/>
+                  {isReturning ? `Session ${brain.sessions} · ${brain.tasks} tasks` : `First session · ${HOME_BASE}`}
+                </p>
               </div>
-            )}
-            <div ref={bottomRef}/>
-          </div>
-
-          {/* Suggestions */}
-          {!thinking && (
-            <div className="px-3 pb-2 space-y-1.5">
-              <p className="text-[9px] uppercase tracking-wider text-slate-600 font-bold">Suggestions</p>
-              {suggestions.map((s, i) => (
-                <button key={i} onClick={() => submit(s)}
-                  className="w-full text-left px-3 py-2 rounded-lg bg-[#1a1d24] border border-slate-800/60 hover:border-amber-500/30 hover:bg-amber-500/5 text-[10px] text-slate-400 hover:text-slate-200 transition-all leading-snug">
-                  {s}
+            </div>
+            <div className="flex gap-0.5">
+              {['chat','skills','memory'].map(v => (
+                <button key={v} onClick={() => setView(v)}
+                  className={`px-2 py-1 rounded text-[9px] font-bold uppercase transition-all ${view === v ? 'bg-amber-500/20 text-amber-400' : 'text-slate-700 hover:text-slate-400'}`}>
+                  {v}
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* ── Chat ── */}
+          {view === 'chat' && <>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2.5" style={{ minHeight: '100px', maxHeight: '200px' }}>
+              {msgs.map((m, i) => (
+                <div key={i} className={`flex ${m.from === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[88%] px-3 py-2 rounded-xl text-xs leading-relaxed ${m.from === 'user' ? 'bg-amber-500/20 text-amber-100 rounded-br-sm' : 'bg-[#1c1f26] text-slate-300 rounded-bl-sm'}`}>
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+              {(thinking || fetching) && (
+                <div className="flex justify-start">
+                  <div className="bg-[#1c1f26] px-3 py-2 rounded-xl rounded-bl-sm flex items-center gap-1.5">
+                    {[0,150,300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: d+'ms' }}/>)}
+                  </div>
+                </div>
+              )}
+              <div ref={bottomRef}/>
+            </div>
+
+            {!thinking && !fetching && (
+              <div className="px-3 pb-2 space-y-1.5">
+                <p className="text-[9px] uppercase tracking-wider text-slate-700 font-bold">Suggestions</p>
+                {suggestions.map((s, i) => (
+                  <button key={i} onClick={() => submit(s)}
+                    className="w-full text-left px-3 py-2 rounded-lg bg-[#1a1d24] border border-slate-800/60 hover:border-amber-500/30 hover:bg-amber-500/5 text-[10px] text-slate-400 hover:text-slate-200 transition-all leading-snug">
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="px-3 pb-2">
+              <div className="flex gap-1.5">
+                <input type="url" value={urlInput} onChange={e => setUrlInput(e.target.value)}
+                  placeholder="Learn from GitHub URL or link…"
+                  onKeyDown={e => e.key === 'Enter' && learnFromUrl(urlInput)}
+                  className="flex-1 bg-[#1a1d24] border border-slate-800 rounded-lg px-2.5 py-1.5 text-[10px] text-slate-400 focus:outline-none focus:border-sky-500/40 placeholder:text-slate-700"/>
+                <button onClick={() => learnFromUrl(urlInput)} disabled={fetching}
+                  className="px-2.5 py-1.5 bg-sky-500/10 border border-sky-500/20 text-sky-400 rounded-lg hover:bg-sky-500/20 transition-all disabled:opacity-40" title="Learn from URL">
+                  <Download className="h-3 w-3"/>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3 pt-0 border-t border-slate-800/40">
+              <form onSubmit={e => { e.preventDefault(); submit(input); }} className="flex gap-2">
+                <input type="text" value={input} onChange={e => setInput(e.target.value)}
+                  placeholder="Type any task…"
+                  className="flex-1 bg-[#1a1d24] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500/50 placeholder:text-slate-700"/>
+                <button type="submit"
+                  className="px-3 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg text-xs font-bold hover:brightness-110 transition-all flex-shrink-0">
+                  <ChevronRight className="h-3.5 w-3.5"/>
+                </button>
+              </form>
+            </div>
+          </>}
+
+          {/* ── Skills ── */}
+          {view === 'skills' && (
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+              <p className="text-[9px] uppercase tracking-wider text-slate-600 font-bold mb-2">{brain.activeSkills.length}/{SKILL_MANIFEST.length} active — click to toggle</p>
+              {SKILL_MANIFEST.map(sk => {
+                const active = brain.activeSkills.includes(sk.id);
+                return (
+                  <div key={sk.id} onClick={() => toggleSkill(sk.id)}
+                    className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-all ${active ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-[#1a1d24] border-slate-800/60 opacity-55 hover:opacity-80'}`}>
+                    <span className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${active ? 'bg-emerald-400' : 'bg-slate-700'}`}/>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1">
+                        <p className={`text-[10px] font-bold truncate ${active ? 'text-slate-200' : 'text-slate-500'}`}>{sk.label}</p>
+                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold flex-shrink-0 ${sk.source === 'github' ? 'bg-violet-500/15 text-violet-400' : 'bg-slate-800/80 text-slate-600'}`}>
+                          {sk.source === 'github' ? 'GitHub' : 'local'}
+                        </span>
+                      </div>
+                      <p className="text-[9px] text-slate-600 leading-tight mt-0.5">{sk.desc}</p>
+                      {sk.repo && <p className="text-[8px] text-slate-700 font-mono mt-0.5">{sk.repo}</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
 
-          {/* Input */}
-          <div className="p-3 pt-0 border-t border-slate-800/40 mt-1">
-            <form onSubmit={e => { e.preventDefault(); submit(input); }} className="flex gap-2">
-              <input
-                type="text"
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                placeholder="Or type your own task…"
-                className="flex-1 bg-[#1a1d24] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-amber-500/50 placeholder:text-slate-700"
-              />
-              <button type="submit"
-                className="px-3 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg text-xs font-bold hover:brightness-110 transition-all flex-shrink-0">
-                <ChevronRight className="h-3.5 w-3.5"/>
+          {/* ── Memory ── */}
+          {view === 'memory' && (
+            <div className="flex-1 overflow-y-auto p-3 space-y-4">
+              <div className="grid grid-cols-3 gap-2">
+                {[['Sessions', brain.sessions], ['Tasks', brain.tasks], ['Sources', brain.sources.length]].map(([l, v]) => (
+                  <div key={l} className="bg-[#1a1d24] rounded-xl p-2.5 text-center">
+                    <p className="text-lg font-bold text-amber-400 tabular-nums leading-tight">{v}</p>
+                    <p className="text-[9px] text-slate-600 uppercase font-bold mt-0.5">{l}</p>
+                  </div>
+                ))}
+              </div>
+
+              {brain.sources.length > 0 ? (
+                <div>
+                  <p className="text-[9px] uppercase tracking-wider text-slate-600 font-bold mb-2">Learned Sources</p>
+                  <div className="space-y-2">
+                    {brain.sources.slice(0, 8).map((s, i) => (
+                      <div key={i} className="p-2 bg-[#1a1d24] rounded-lg border border-slate-800/60">
+                        <p className="text-[9px] font-mono text-sky-400 truncate">{s.url}</p>
+                        <p className="text-[9px] text-slate-600 leading-tight mt-1 line-clamp-2">{s.summary.slice(0, 100)}</p>
+                        <p className="text-[8px] text-slate-700 mt-1">{s.chars.toLocaleString()} chars · {timeSince(s.addedAt)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-4">
+                  <p className="text-[10px] text-slate-600">No sources yet.</p>
+                  <p className="text-[9px] text-slate-700 mt-1">Paste a GitHub URL in Chat to learn from it.</p>
+                </div>
+              )}
+
+              <div>
+                <p className="text-[9px] uppercase tracking-wider text-slate-600 font-bold mb-2">Google Drive Sync</p>
+                <input type="url" value={brain.driveUrl} onChange={e => setBrain(b => ({ ...b, driveUrl: e.target.value }))}
+                  placeholder="Paste Apps Script web app URL…"
+                  className="w-full bg-[#1a1d24] border border-slate-800 rounded-lg px-3 py-2 text-[10px] text-slate-400 focus:outline-none focus:border-amber-500/40 placeholder:text-slate-700"/>
+                {brain.driveUrl && (
+                  <button onClick={syncToDrive}
+                    className="mt-2 w-full py-2 rounded-lg bg-amber-500/15 border border-amber-500/25 text-amber-400 text-[10px] font-bold hover:bg-amber-500/25 transition-all">
+                    Sync Memory to Drive
+                  </button>
+                )}
+              </div>
+
+              <button onClick={() => {
+                if (confirm('Reset CORE memory? Clears all sessions, tasks, and sources.')) {
+                  localStorage.removeItem(BRAIN_KEY);
+                  setBrain(freshBrain());
+                  setMsgs([{ from: 'bot', text: 'Memory cleared. Starting fresh.' }]);
+                  setView('chat');
+                }
+              }} className="w-full py-2 rounded-lg border border-red-500/20 text-red-500/50 text-[10px] hover:border-red-500/40 hover:text-red-400 transition-all">
+                Reset Memory
               </button>
-            </form>
-          </div>
+            </div>
+          )}
         </div>
       )}
     </>
