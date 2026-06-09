@@ -255,7 +255,9 @@ function SpawnModal({ onSpawn, onClose }) {
 
 /* ── Main ── */
 export default function AIOSDashboard() {
-  const [tab, setTab]             = useState('analytics');
+  const VALID_TABS = ['analytics','workflows','ai','bots','content','revenue','system'];
+  const hashTab = () => { const h = window.location.hash.slice(1); return VALID_TABS.includes(h) ? h : 'analytics'; };
+  const [tab, setTab]             = useState(hashTab);
   const [entity, setEntity]       = useState('all');
   const [ideas, setIdeas]         = useState([
     {id:1,title:'Building a Local LLM Workflow with Ollama',           status:'In Progress',phase:'Scripting'},
@@ -275,6 +277,14 @@ export default function AIOSDashboard() {
   const [modal, setModal]         = useState(false);
   const [liveStats, setLiveStats] = useState({ ...BASE_STATS[entity] });
   const tickRef = useRef(0);
+
+  /* hash routing */
+  useEffect(() => { window.location.hash = tab; }, [tab]);
+  useEffect(() => {
+    const onHash = () => setTab(hashTab());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   /* sync entity */
   useEffect(() => { setLiveStats({...BASE_STATS[entity]}); }, [entity]);
